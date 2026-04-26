@@ -220,12 +220,18 @@ class ScribeFloatApp(ctk.CTk):
 
         self._bar_phase += 0.2
         
+        if not hasattr(self, "_smoothed_level"):
+            self._smoothed_level = 0.0
+            
+        # Filtro de suavizado para que el movimiento sea elegante y no salte
+        self._smoothed_level += (self._audio_level - self._smoothed_level) * 0.3
+        
         # Reduced multiplier and lower cap so waves stay elegant and don't hit the top
-        target_height = 8 + int(self._audio_level * 50) 
+        target_height = 8 + int(self._smoothed_level * 50) 
         target_height = min(20, target_height)
         
         # Color yellow if speaking loudly enough
-        color = "#ffcc00" if self._audio_level > 0.03 else "#ffffff"
+        color = "#ffcc00" if self._smoothed_level > 0.03 else "#ffffff"
 
         for i, bar in enumerate(self.mini_bars):
             variation = math.sin(self._bar_phase + i) * 1.5
@@ -235,8 +241,10 @@ class ScribeFloatApp(ctk.CTk):
             self.mini_canvas.itemconfig(bar, fill=color)
             
         # Subtle pulsing effect for the main circle
-        circle_size = 60 + int(self._audio_level * 8)
-        circle_size = min(68, circle_size)  # Up to 68px (root is 70x70)
+        # Aseguramos que el tamaño sea un número par para que no haya temblor de 1 píxel al centrar
+        extra_size = (int(self._smoothed_level * 15) // 2) * 2
+        circle_size = min(68, 60 + extra_size)
+        
         self.mini_frame.configure(
             width=circle_size,
             height=circle_size,
