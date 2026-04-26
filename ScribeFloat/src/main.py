@@ -37,7 +37,8 @@ class ScribeFloatApp(ctk.CTk):
         self.overrideredirect(True)
         self.attributes("-alpha", 0.95)
         self.wm_attributes("-topmost", True)
-        self.configure(fg_color=C["bg0"])
+        self.configure(fg_color="#000001")
+        self.wm_attributes("-transparentcolor", "#000001")
         # Prevent ScribeFloat from stealing focus from other apps
         self.focusmodel("passive")
 
@@ -199,8 +200,8 @@ class ScribeFloatApp(ctk.CTk):
         if hasattr(self, "mini_frame"):
             self.mini_frame.destroy()
         self.geometry("380x340")
-        self.wm_attributes("-transparentcolor", "") # Remove transparency hack
-        self.configure(fg_color=C["bg0"])
+        self.configure(fg_color="#000001")
+        self.wm_attributes("-transparentcolor", "#000001")
         self.attributes("-alpha", 0.95)
         self.main_panel.pack(fill="both", expand=True, padx=4, pady=4)
 
