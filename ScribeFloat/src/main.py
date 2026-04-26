@@ -4,6 +4,7 @@ Ventana flotante + Mini mode (icono con ondas) + System Tray + Hotkey global.
 """
 import customtkinter as ctk
 import threading, math, sys, os, time, keyboard
+import pygame
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils import clean_text, save_transcription
@@ -54,6 +55,12 @@ class ScribeFloatApp(ctk.CTk):
         self._mini = False
         self._audio_level = 0.0
         self._saved_clipboard = None  # To restore clipboard after paste
+
+        # Inicializar el motor de audio para mp3
+        try:
+            pygame.mixer.init()
+        except Exception as e:
+            print(f"[Audio] Error inicializando pygame: {e}")
 
         self._build_full_ui()
         self._init_backends()
@@ -154,49 +161,78 @@ class ScribeFloatApp(ctk.CTk):
         self._mini = True
         self.main_panel.pack_forget()
         self.geometry("64x64")
-        self.configure(fg_color="")  # transparent-ish
-        self.attributes("-alpha", 0.92)
+        
+        # Transparent corners hack for Windows
+        self.configure(fg_color="#000001")
+        self.wm_attributes("-transparentcolor", "#000001")
+        self.attributes("-alpha", 1.0) # Solid UI
 
-        self.mini_canvas = ctk.CTkCanvas(self, width=60, height=60, bg=C["bg0"], highlightthickness=0)
-        self.mini_canvas.pack(padx=2, pady=2)
-        # Draw circle background
-        self.mini_canvas.create_oval(2, 2, 58, 58, fill=C["bg1"], outline=C["brd"], width=2)
-        # Draw 3 bars (sound wave)
+        # Anti-aliased circle with transparent center
+        self.mini_frame = ctk.CTkFrame(self, width=60, height=60, corner_radius=30, 
+                                       fg_color="#000001", border_width=2, border_color="#ffffff")
+        self.mini_frame.pack(padx=2, pady=2)
+        self.mini_frame.pack_propagate(False)
+
+        # Inner canvas for the bars (transparent)
+        self.mini_canvas = ctk.CTkCanvas(self.mini_frame, width=40, height=40, bg="#000001", highlightthickness=0)
+        self.mini_canvas.place(relx=0.5, rely=0.5, anchor="center")
+        
         self.mini_bars = []
-        for i, h in enumerate([10, 18, 10]):
-            x = 18 + i * 10
-            b = self.mini_canvas.create_rectangle(x, 30-h//2, x+6, 30+h//2,
-                fill=C["red"] if self.is_recording else C["idle"], outline="")
+        for i in range(3):
+            x = 8 + i * 12
+            # Rounded lines instead of sharp rectangles
+            b = self.mini_canvas.create_line(x, 16, x, 24, fill="#ffffff", width=5, capstyle="round")
             self.mini_bars.append(b)
 
         # Bind interactions
-        self.mini_canvas.bind("<ButtonPress-1>", self._sm)
-        self.mini_canvas.bind("<ButtonRelease-1>", self._em)
-        self.mini_canvas.bind("<B1-Motion>", self._dm)
-        self.mini_canvas.bind("<Double-Button-1>", lambda e: self._restore_full())
+        for w in [self.mini_frame, self.mini_canvas]:
+            w.bind("<ButtonPress-1>", self._sm)
+            w.bind("<ButtonRelease-1>", self._em)
+            w.bind("<B1-Motion>", self._dm)
+            w.bind("<Double-Button-1>", lambda e: self._restore_full())
 
         if self.is_recording:
             self._animate_mini()
 
     def _restore_full(self):
         self._mini = False
-        if hasattr(self, "mini_canvas"):
-            self.mini_canvas.destroy()
+        if hasattr(self, "mini_frame"):
+            self.mini_frame.destroy()
         self.geometry("380x340")
+        self.wm_attributes("-transparentcolor", "") # Remove transparency hack
         self.configure(fg_color=C["bg0"])
         self.attributes("-alpha", 0.95)
         self.main_panel.pack(fill="both", expand=True, padx=4, pady=4)
 
     def _animate_mini(self):
-        if not self._mini or not self.is_recording:
+        if not self._mini:
             return
-        self._bar_phase += 0.5
+            
+        if not self.is_recording:
+            # Revert to idle state (White bars)
+            for i, bar in enumerate(self.mini_bars):
+                x = 8 + i * 12
+                self.mini_canvas.coords(bar, x, 16, x, 24)
+                self.mini_canvas.itemconfig(bar, fill="#ffffff")
+            return
+
+        self._bar_phase += 0.2
+        
+        # Reduced multiplier and lower cap so waves stay elegant and don't hit the top
+        target_height = 8 + int(self._audio_level * 50) 
+        target_height = min(20, target_height)
+        
+        # Color yellow if speaking loudly enough
+        color = "#ffcc00" if self._audio_level > 0.03 else "#ffffff"
+
         for i, bar in enumerate(self.mini_bars):
-            h = int(6 + 12 * abs(math.sin(self._bar_phase + i * 0.9)))
-            x = 18 + i * 10
-            self.mini_canvas.coords(bar, x, 30-h//2, x+6, 30+h//2)
-            self.mini_canvas.itemconfig(bar, fill=C["red"])
-        self.after(100, self._animate_mini)
+            variation = math.sin(self._bar_phase + i) * 1.5
+            h = max(6, target_height + variation)
+            x = 8 + i * 12
+            self.mini_canvas.coords(bar, x, 20-h/2, x, 20+h/2)
+            self.mini_canvas.itemconfig(bar, fill=color)
+            
+        self.after(50, self._animate_mini)
 
     # ── HOTKEY ────────────────────────────────────
     def _register_hotkey(self):
@@ -243,6 +279,13 @@ class ScribeFloatApp(ctk.CTk):
 
     def _start_rec(self):
         try:
+            # Reproducir Audio 1 del escritorio
+            try:
+                pygame.mixer.music.load(r"C:\Users\jaell\Desktop\1.mp3")
+                pygame.mixer.music.play()
+            except Exception as e:
+                print(f"[Audio] Error con 1.mp3: {e}")
+
             from audio_stream import AudioCapture
             self.is_recording = True
             self.rec_btn.configure(text="■ STOP", fg_color="#441111", text_color="#ff6666")
@@ -263,6 +306,13 @@ class ScribeFloatApp(ctk.CTk):
             self.is_recording = False
 
     def _stop_rec(self):
+        # Reproducir Audio 2 del escritorio
+        try:
+            pygame.mixer.music.load(r"C:\Users\jaell\Desktop\2.mp3")
+            pygame.mixer.music.play()
+        except Exception as e:
+            print(f"[Audio] Error con 2.mp3: {e}")
+        
         self.is_recording = False
         self.rec_btn.configure(text="● REC", fg_color="#331111", text_color=C["red"])
         self._set_status("Detenido")
@@ -270,10 +320,9 @@ class ScribeFloatApp(ctk.CTk):
         if self.audio_capture:
             self.audio_capture.stop()
             self.audio_capture = None
-        # Update mini bars to idle
-        if self._mini and hasattr(self, "mini_bars"):
-            for bar in self.mini_bars:
-                self.mini_canvas.itemconfig(bar, fill=C["idle"])
+        # Call animate_mini one last time to reset it to idle state
+        if self._mini:
+            self._animate_mini()
 
     def _on_segment(self, audio_path):
         if not self.scribe_engine:
