@@ -161,7 +161,7 @@ class ScribeFloatApp(ctk.CTk):
     def _go_mini(self):
         self._mini = True
         self.main_panel.pack_forget()
-        self.geometry("64x64")
+        self.geometry("70x70")
         
         # Transparent corners hack for Windows
         self.configure(fg_color="#000001")
@@ -171,7 +171,7 @@ class ScribeFloatApp(ctk.CTk):
         # Anti-aliased circle with solid background that catches clicks
         self.mini_frame = ctk.CTkFrame(self, width=60, height=60, corner_radius=30, 
                                        fg_color=C["bg1"], border_width=2, border_color="#ffffff")
-        self.mini_frame.pack(padx=2, pady=2)
+        self.mini_frame.place(relx=0.5, rely=0.5, anchor="center")
         self.mini_frame.pack_propagate(False)
 
         # Inner canvas for the bars
@@ -215,6 +215,7 @@ class ScribeFloatApp(ctk.CTk):
                 x = 8 + i * 12
                 self.mini_canvas.coords(bar, x, 16, x, 24)
                 self.mini_canvas.itemconfig(bar, fill="#ffffff")
+            self.mini_frame.configure(width=60, height=60, corner_radius=30, border_color="#ffffff")
             return
 
         self._bar_phase += 0.2
@@ -232,6 +233,16 @@ class ScribeFloatApp(ctk.CTk):
             x = 8 + i * 12
             self.mini_canvas.coords(bar, x, 20-h/2, x, 20+h/2)
             self.mini_canvas.itemconfig(bar, fill=color)
+            
+        # Subtle pulsing effect for the main circle
+        circle_size = 60 + int(self._audio_level * 8)
+        circle_size = min(68, circle_size)  # Up to 68px (root is 70x70)
+        self.mini_frame.configure(
+            width=circle_size,
+            height=circle_size,
+            corner_radius=circle_size // 2,
+            border_color=color
+        )
             
         self.after(50, self._animate_mini)
 
