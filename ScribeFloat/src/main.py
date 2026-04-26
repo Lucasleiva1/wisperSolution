@@ -166,16 +166,16 @@ class ScribeFloatApp(ctk.CTk):
         # Transparent corners hack for Windows
         self.configure(fg_color="#000001")
         self.wm_attributes("-transparentcolor", "#000001")
-        self.attributes("-alpha", 1.0) # Solid UI
+        self.attributes("-alpha", 0.85) # Efecto cristal oscuro
 
-        # Anti-aliased circle with transparent center
+        # Anti-aliased circle with solid background that catches clicks
         self.mini_frame = ctk.CTkFrame(self, width=60, height=60, corner_radius=30, 
-                                       fg_color="#000001", border_width=2, border_color="#ffffff")
+                                       fg_color=C["bg1"], border_width=2, border_color="#ffffff")
         self.mini_frame.pack(padx=2, pady=2)
         self.mini_frame.pack_propagate(False)
 
-        # Inner canvas for the bars (transparent)
-        self.mini_canvas = ctk.CTkCanvas(self.mini_frame, width=40, height=40, bg="#000001", highlightthickness=0)
+        # Inner canvas for the bars
+        self.mini_canvas = ctk.CTkCanvas(self.mini_frame, width=40, height=40, bg=C["bg1"], highlightthickness=0)
         self.mini_canvas.place(relx=0.5, rely=0.5, anchor="center")
         
         self.mini_bars = []
