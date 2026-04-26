@@ -1,0 +1,19 @@
+# Entornos virtuales
+venv/
+env/
+.env
+
+# Archivos compilados de Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Modelos descargados
+ScribeFloat/models/
+
+# Exportaciones temporales
+ScribeFloat/exports/
+
+# Archivos del SO
+.DS_Store
+Thumbs.db
