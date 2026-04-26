@@ -339,7 +339,7 @@ class ScribeFloatApp(ctk.CTk):
                 self.after(100, lambda: self._type_to_active_window(cleaned))
                 # Auto AI if enabled (improves in display only, doesn't re-paste)
                 if self.cfg.get("auto_ai", True) and self.ollama_client and self.ollama_client.is_available:
-                    self.after(600, self._auto_improve)
+                    self.after(50, self._auto_improve)
                 else:
                     self.after(0, lambda: self._set_status("🔴 Grabando..." if self.is_recording else "Listo"))
         threading.Thread(target=_t, daemon=True).start()

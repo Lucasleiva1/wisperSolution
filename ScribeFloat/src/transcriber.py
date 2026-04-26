@@ -69,7 +69,7 @@ class ScribeEngine:
         try:
             segments, info = self.model.transcribe(
                 audio_path,
-                beam_size=5,
+                beam_size=1,
                 language=self.current_language,
                 vad_filter=True,
                 vad_parameters=dict(
@@ -92,7 +92,7 @@ class ScribeEngine:
         try:
             segments, info = self.model.transcribe(
                 audio_path,
-                beam_size=5,
+                beam_size=1,
                 language=self.current_language,
                 vad_filter=True,
                 vad_parameters=dict(min_silence_duration_ms=800)

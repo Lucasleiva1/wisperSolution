@@ -18,7 +18,7 @@ BLOCK_SIZE = int(SAMPLE_RATE * BLOCK_DURATION_MS / 1000)  # Muestras por bloque
 # Parámetros VAD — umbrales bajos para captar bien la voz
 SILENCE_THRESHOLD = 0.0003  # Umbral de energía (muy sensible)
 MIN_SPEECH_DURATION = 0.3  # Segundos mínimos de habla para considerar frase
-MAX_SILENCE_DURATION = 1.8 # Segundos de silencio antes de cortar la frase
+MAX_SILENCE_DURATION = 0.8 # Segundos de silencio antes de cortar la frase
 MAX_RECORDING_DURATION = 30.0  # Máximo segundos por segmento
 
 
