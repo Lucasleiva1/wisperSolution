@@ -40,25 +40,6 @@ class SettingsPanel(ctk.CTkToplevel):
                                           fg_color=C["bg2"], hover_color="#222", text_color=C["accent"],
                                           font=("Segoe UI", 10), command=self._start_capture)
         self.capture_btn.pack(side="left", padx=(8, 0))
-
-        # --- Auto AI ---
-        ctk.CTkLabel(frame, text="Post-procesado automático con IA:", font=("Segoe UI", 11),
-                      text_color=C["dim"]).pack(anchor="w", pady=(0, 4))
-
-        self.auto_ai_var = ctk.BooleanVar(value=self.config_data.get("auto_ai", True))
-        ctk.CTkSwitch(frame, text="Activar IA automática", variable=self.auto_ai_var,
-                       font=("Segoe UI", 11), text_color=C["text"],
-                       fg_color=C["border"], progress_color=C["purple"]).pack(anchor="w", pady=(0, 12))
-
-        # --- Modelo Ollama ---
-        ctk.CTkLabel(frame, text="Modelo Ollama:", font=("Segoe UI", 11),
-                      text_color=C["dim"]).pack(anchor="w", pady=(0, 4))
-
-        self.model_var = ctk.StringVar(value=self.config_data.get("ollama_model", "qwen3.5:2b"))
-        ctk.CTkEntry(frame, textvariable=self.model_var, width=200, height=30,
-                      fg_color=C["bg2"], border_color=C["border"], font=("Consolas", 11),
-                      text_color=C["text"]).pack(anchor="w", pady=(0, 16))
-
         # --- Guardar ---
         ctk.CTkButton(frame, text="Guardar", width=120, height=34, corner_radius=10,
                        fg_color=C["purple"], hover_color="#8844cc", text_color="#fff",
@@ -83,8 +64,6 @@ class SettingsPanel(ctk.CTkToplevel):
 
     def _save(self):
         self.config_data["hotkey"] = self.hotkey_var.get()
-        self.config_data["auto_ai"] = self.auto_ai_var.get()
-        self.config_data["ollama_model"] = self.model_var.get()
         if self.on_save:
             self.on_save(self.config_data)
         self.destroy()

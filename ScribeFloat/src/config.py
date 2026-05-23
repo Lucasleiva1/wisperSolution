@@ -2,14 +2,13 @@
 import json
 import os
 
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
+appdata_dir = os.path.join(os.getenv("LOCALAPPDATA", os.path.expanduser("~")), "ScribeFloat")
+CONFIG_FILE = os.path.join(appdata_dir, "config.json")
 
 DEFAULT_CONFIG = {
     "hotkey": "ctrl+space",
     "language": "es",
-    "auto_ai": True,
     "model_size": "small",
-    "ollama_model": "qwen3.5:2b",
 }
 
 def load_config():
@@ -25,5 +24,6 @@ def load_config():
     return dict(DEFAULT_CONFIG)
 
 def save_config(cfg):
+    os.makedirs(appdata_dir, exist_ok=True)
     with open(CONFIG_FILE, "w") as f:
         json.dump(cfg, f, indent=2)

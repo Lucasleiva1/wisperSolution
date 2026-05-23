@@ -1,7 +1,5 @@
 {
   "hotkey": "ctrl+space",
   "language": "es",
-  "auto_ai": true,
-  "model_size": "small",
-  "ollama_model": "qwen3.5:2b"
+  "model_size": "small"
 }

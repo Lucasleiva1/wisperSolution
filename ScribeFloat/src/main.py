@@ -3,12 +3,15 @@ ScribeFloat - UI Principal
 Ventana flotante + Mini mode (icono con ondas) + System Tray + Hotkey global.
 """
 import customtkinter as ctk
-import threading, math, sys, os, time, keyboard
+import threading, math, sys, os, time, keyboard, queue
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import pygame
+import pystray
+from PIL import Image, ImageDraw
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils import clean_text, save_transcription
-from ollama_client import OllamaClient
+
 from config import load_config, save_config
 from settings_ui import SettingsPanel
 
@@ -26,6 +29,9 @@ C = {
 }
 LANGS = {"Español (es)":"es","Inglés (en)":"en","Portugués (pt)":"pt",
          "Francés (fr)":"fr","Alemán (de)":"de","Italiano (it)":"it"}
+
+
+START_SOUND_DELAY_MS = 350
 
 
 class ScribeFloatApp(ctk.CTk):
@@ -46,26 +52,65 @@ class ScribeFloatApp(ctk.CTk):
         self.is_recording = False
         self.current_language = self.cfg.get("language", "es")
         self.full_transcript = ""
+        self._transcript_before_session = ""
+        self._session_transcript = ""
+        self._session_parts = {}
+        self._completed_segments = set()
+        self._last_pasted_session_text = ""
+        self._segment_seq = 0
+        self._pending_segments = 0
+        self._paste_after_stop = False
+        self._session_pasted = False
+        self._segment_lock = threading.Lock()
+        self._active_session_id = 0
+        self._segment_queue = queue.Queue()
+        self._segment_worker_thread = threading.Thread(target=self._segment_worker, daemon=True)
+        self._segment_worker_thread.start()
+        self._last_hotkey_time = 0.0
+        self._hotkey_enabled_after = time.monotonic() + 1.0
         self.audio_capture = None
         self.scribe_engine = None
-        self.ollama_client = None
+
         self._anim_id = None
         self._bar_phase = 0
         self._ox = 0
         self._oy = 0
         self._mini = False
         self._audio_level = 0.0
-        self._saved_clipboard = None  # To restore clipboard after paste
-
-        # Inicializar el motor de audio para mp3
-        try:
-            pygame.mixer.init()
-        except Exception as e:
-            print(f"[Audio] Error inicializando pygame: {e}")
 
         self._build_full_ui()
+        self._init_sounds()
         self._init_backends()
         self._register_hotkey()
+
+    def _asset_path(self, filename):
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(base_dir, "assets", filename)
+
+    def _init_sounds(self):
+        self._sounds_enabled = False
+        self._sound_paths = {
+            "start": self._asset_path("start.mp3"),
+            "stop": self._asset_path("stop.mp3"),
+        }
+        try:
+            pygame.mixer.init()
+            self._sounds_enabled = True
+        except Exception as e:
+            print(f"[Audio] Error inicializando sonidos: {e}")
+
+    def _play_sound(self, name):
+        if not self._sounds_enabled:
+            return
+        path = self._sound_paths.get(name)
+        if not path or not os.path.exists(path):
+            print(f"[Audio] No existe sonido: {path}")
+            return
+        try:
+            pygame.mixer.music.load(path)
+            pygame.mixer.music.play()
+        except Exception as e:
+            print(f"[Audio] Error reproduciendo {name}: {e}")
 
     # ── BUILD FULL UI ──────────────────────────────
     def _build_full_ui(self):
@@ -103,8 +148,7 @@ class ScribeFloatApp(ctk.CTk):
             self.bars.append(self.wave_canvas.create_rectangle(x, 14-h//2, x+5, 14+h//2, fill=C["idle"], outline=""))
         self.status_label = ctk.CTkLabel(sf, text="  Listo", font=("Segoe UI", 11), text_color=C["dim"])
         self.status_label.pack(side="left")
-        self.ollama_label = ctk.CTkLabel(sf, text="", font=("Segoe UI", 10), text_color=C["pur"])
-        self.ollama_label.pack(side="right", padx=5)
+
 
         # Lang selector
         lf = ctk.CTkFrame(self.main_panel, fg_color="transparent", height=30)
@@ -136,10 +180,7 @@ class ScribeFloatApp(ctk.CTk):
             fg_color="#331111", hover_color="#442222", text_color=C["red"],
             font=("Segoe UI", 11, "bold"), command=self._toggle_rec)
         self.rec_btn.pack(side="left")
-        self.ai_btn = ctk.CTkButton(af, text="✨ AI", width=60, height=30, corner_radius=15,
-            fg_color="#1a1133", hover_color="#2a1a44", text_color=C["pur"],
-            font=("Segoe UI", 11, "bold"), command=self._improve_ai)
-        self.ai_btn.pack(side="left", padx=4)
+
         for icon, clr, cmd in [("💾",C["grn"],self._save),("🗑",C["dim"],self._clear),("📋",C["blu"],self._copy)]:
             ctk.CTkButton(af, text=icon, width=36, height=30, corner_radius=15,
                 fg_color=C["bg2"], hover_color=C["hov"], text_color=clr,
@@ -162,6 +203,7 @@ class ScribeFloatApp(ctk.CTk):
         self._mini = True
         self.main_panel.pack_forget()
         self.geometry("70x70")
+        self._show_tray()
         
         # Transparent corners hack for Windows
         self.configure(fg_color="#000001")
@@ -197,6 +239,7 @@ class ScribeFloatApp(ctk.CTk):
 
     def _restore_full(self):
         self._mini = False
+        self._hide_tray()
         if hasattr(self, "mini_frame"):
             self.mini_frame.destroy()
         self.geometry("380x340")
@@ -204,6 +247,35 @@ class ScribeFloatApp(ctk.CTk):
         self.wm_attributes("-transparentcolor", "#000001")
         self.attributes("-alpha", 0.95)
         self.main_panel.pack(fill="both", expand=True, padx=4, pady=4)
+
+    def _show_tray(self):
+        if hasattr(self, "_tray_icon") and self._tray_icon is not None:
+            return
+
+        img = Image.new('RGB', (64, 64), color=(18, 18, 18))
+        d = ImageDraw.Draw(img)
+        d.ellipse((4, 4, 60, 60), outline=(255, 255, 255), width=4)
+        d.line((22, 20, 22, 44), fill=(255, 255, 255), width=6)
+        d.line((32, 14, 32, 50), fill=(255, 255, 255), width=6)
+        d.line((42, 20, 42, 44), fill=(255, 255, 255), width=6)
+
+        menu = pystray.Menu(
+            pystray.MenuItem("Restaurar ScribeFloat", lambda icon, item: self.after(0, self._restore_full), default=True),
+            pystray.MenuItem("Configuración", lambda icon, item: self.after(0, self._open_settings_from_tray)),
+            pystray.MenuItem("Cerrar ScribeFloat", lambda icon, item: self.after(0, self._on_close))
+        )
+
+        self._tray_icon = pystray.Icon("ScribeFloat", img, "ScribeFloat", menu)
+        threading.Thread(target=self._tray_icon.run, daemon=True).start()
+
+    def _hide_tray(self):
+        if hasattr(self, "_tray_icon") and self._tray_icon is not None:
+            self._tray_icon.stop()
+            self._tray_icon = None
+
+    def _open_settings_from_tray(self):
+        self._restore_full()
+        self._open_settings()
 
     def _animate_mini(self):
         if not self._mini:
@@ -227,14 +299,14 @@ class ScribeFloatApp(ctk.CTk):
         self._smoothed_level += (self._audio_level - self._smoothed_level) * 0.3
         
         # Reduced multiplier and lower cap so waves stay elegant and don't hit the top
-        target_height = 8 + int(self._smoothed_level * 50) 
-        target_height = min(20, target_height)
+        target_height = 8 + int(self._smoothed_level * 25)
+        target_height = min(18, target_height)
         
         # Color yellow if speaking loudly enough
-        color = "#ffcc00" if self._smoothed_level > 0.03 else "#ffffff"
+        color = "#ffcc00" if self._smoothed_level > 0.01 else "#ffffff"
 
         for i, bar in enumerate(self.mini_bars):
-            variation = math.sin(self._bar_phase + i) * 1.5
+            variation = math.sin(self._bar_phase + i) * 0.5
             h = max(6, target_height + variation)
             x = 8 + i * 12
             self.mini_canvas.coords(bar, x, 20-h/2, x, 20+h/2)
@@ -242,8 +314,8 @@ class ScribeFloatApp(ctk.CTk):
             
         # Subtle pulsing effect for the main circle
         # Aseguramos que el tamaño sea un número par para que no haya temblor de 1 píxel al centrar
-        extra_size = (int(self._smoothed_level * 15) // 2) * 2
-        circle_size = min(68, 60 + extra_size)
+        extra_size = (int(self._smoothed_level * 6) // 2) * 2
+        circle_size = min(64, 60 + extra_size)
         
         self.mini_frame.configure(
             width=circle_size,
@@ -262,32 +334,34 @@ class ScribeFloatApp(ctk.CTk):
         except Exception:
             pass
         try:
-            keyboard.add_hotkey(hk, self._hotkey_triggered, suppress=True)
+            keyboard.add_hotkey(hk, self._hotkey_triggered, suppress=True, trigger_on_release=True)
+            self._hotkey_enabled_after = time.monotonic() + 1.0
             print(f"[Hotkey] Registrado: {hk}")
         except Exception as e:
             print(f"[Hotkey] Error: {e}")
 
     def _hotkey_triggered(self):
-        self.after(0, self._toggle_rec)
+        now = time.monotonic()
+        if now < self._hotkey_enabled_after:
+            return
+        if now - self._last_hotkey_time < 0.45:
+            return
+        self._last_hotkey_time = now
+        self.after(80, self._toggle_rec)
 
     # ── BACKENDS ──────────────────────────────────
     def _init_backends(self):
         def _w():
             try:
-                self.ollama_client = OllamaClient(model=self.cfg.get("ollama_model", "qwen3.5:2b"))
-                if self.ollama_client.is_available:
-                    self.after(0, lambda: self.ollama_label.configure(text="🟢 qwen3.5:2b"))
-                else:
-                    self.after(0, lambda: self.ollama_label.configure(text="🔴 Ollama", text_color=C["dim"]))
-            except Exception:
-                self.after(0, lambda: self.ollama_label.configure(text="🔴 Ollama", text_color=C["dim"]))
-            try:
                 from transcriber import ScribeEngine
-                self.scribe_engine = ScribeEngine(language=self.current_language)
+                model_size = self.cfg.get("model_size", "small")
+                self.scribe_engine = ScribeEngine(language=self.current_language, model_size=model_size)
+                self.after(0, lambda: self._set_status("Cargando modelo..."))
+                self.scribe_engine.warm_up()
                 self.after(0, lambda: self._set_status("Modelo listo"))
             except Exception as e:
                 print(f"[Init] ScribeEngine error: {e}")
-                self.after(0, lambda: self._set_status(f"Error: {e}"))
+                self.after(0, lambda err=str(e): self._set_status(f"Error: {err}"))
         threading.Thread(target=_w, daemon=True).start()
 
     # ── RECORDING ─────────────────────────────────
@@ -295,28 +369,39 @@ class ScribeFloatApp(ctk.CTk):
         if self.is_recording:
             self._stop_rec()
         else:
+            with self._segment_lock:
+                has_pending_work = self._pending_segments > 0
+            if has_pending_work:
+                self._set_status("Terminando transcripcion...")
+                return
             self._start_rec()
 
     def _start_rec(self):
         try:
-            # Reproducir Audio 1 del escritorio
-            try:
-                pygame.mixer.music.load(r"C:\Users\jaell\Desktop\1.mp3")
-                pygame.mixer.music.play()
-            except Exception as e:
-                print(f"[Audio] Error con 1.mp3: {e}")
-
-            from audio_stream import AudioCapture
+            self._reset_transcription_state(clear_display=True, clear_model_context=True)
+            self._begin_recording_session()
             self.is_recording = True
             self.rec_btn.configure(text="■ STOP", fg_color="#441111", text_color="#ff6666")
             self._set_status("🔴 Grabando...")
             self._animate_bars_start()
+            self._play_sound("start")
+            self.after(START_SOUND_DELAY_MS, self._start_audio_capture)
+        except Exception as e:
+            self._set_status(f"Error mic: {e}")
+            self.is_recording = False
 
+    def _start_audio_capture(self):
+        if not self.is_recording:
+            return
+        try:
+            from audio_stream import AudioCapture
             self.audio_capture = AudioCapture(
                 on_segment_ready=self._on_segment,
-                on_level_update=self._on_level
+                on_level_update=self._on_level,
+                finalize_on_silence=True
             )
             self.audio_capture.start()
+            self._set_status("🔴 Grabando...")
 
             # Animate mini if in mini mode
             if self._mini:
@@ -326,42 +411,134 @@ class ScribeFloatApp(ctk.CTk):
             self.is_recording = False
 
     def _stop_rec(self):
-        # Reproducir Audio 2 del escritorio
-        try:
-            pygame.mixer.music.load(r"C:\Users\jaell\Desktop\2.mp3")
-            pygame.mixer.music.play()
-        except Exception as e:
-            print(f"[Audio] Error con 2.mp3: {e}")
-        
         self.is_recording = False
+        self._paste_after_stop = True
         self.rec_btn.configure(text="● REC", fg_color="#331111", text_color=C["red"])
-        self._set_status("Detenido")
+        self._set_status("Finalizando...")
         self._animate_bars_stop()
         if self.audio_capture:
             self.audio_capture.stop()
             self.audio_capture = None
+        self._play_sound("stop")
         # Call animate_mini one last time to reset it to idle state
         if self._mini:
             self._animate_mini()
+        self._maybe_paste_session()
 
     def _on_segment(self, audio_path):
         if not self.scribe_engine:
+            try:
+                os.remove(audio_path)
+            except Exception:
+                pass
+            self.after(0, lambda: self._set_status("Modelo cargando..."))
             return
-        def _t():
-            self.after(0, lambda: self._set_status("Transcribiendo..."))
-            text = self.scribe_engine.transcribe(audio_path)
-            if text and text.strip():
-                cleaned = clean_text(text)
-                self.full_transcript += (" " + cleaned) if self.full_transcript else cleaned
-                self.after(0, lambda: self._show_text(cleaned))
-                # Type into the active window (Notepad, Word, etc.)
-                self.after(100, lambda: self._type_to_active_window(cleaned))
-                # Auto AI if enabled (improves in display only, doesn't re-paste)
-                if self.cfg.get("auto_ai", True) and self.ollama_client and self.ollama_client.is_available:
-                    self.after(50, self._auto_improve)
+
+        with self._segment_lock:
+            session_id = self._active_session_id
+            self._segment_seq += 1
+            segment_id = self._segment_seq
+            self._pending_segments += 1
+
+        self._segment_queue.put((session_id, segment_id, audio_path))
+
+    def _segment_worker(self):
+        while True:
+            item = self._segment_queue.get()
+            if item is None:
+                self._segment_queue.task_done()
+                return
+
+            session_id, segment_id, audio_path = item
+            try:
+                self.after(0, lambda: self._set_status("Transcribiendo..."))
+                text = self.scribe_engine.transcribe(audio_path)
+
+                try:
+                    os.remove(audio_path)
+                except Exception:
+                    pass
+
+                if text.startswith("[Error:"):
+                    self.after(0, lambda msg=text, sid=segment_id, sess=session_id: self._finish_segment(sess, sid, "", msg))
+                    continue
+
+                cleaned = clean_text(text) if text and text.strip() else ""
+                self.after(0, lambda sid=segment_id, value=cleaned, sess=session_id: self._finish_segment(sess, sid, value))
+            finally:
+                self._segment_queue.task_done()
+
+    def _begin_recording_session(self):
+        with self._segment_lock:
+            self._active_session_id += 1
+            self._transcript_before_session = ""
+            self._session_transcript = ""
+            self._session_parts = {}
+            self._completed_segments = set()
+            self._last_pasted_session_text = ""
+            self._segment_seq = 0
+            self._pending_segments = 0
+            self._paste_after_stop = False
+            self._session_pasted = False
+
+    def _finish_segment(self, session_id, segment_id, text, error=None):
+        with self._segment_lock:
+            if session_id != self._active_session_id:
+                return
+            self._completed_segments.add(segment_id)
+            if text:
+                self._session_parts[segment_id] = text
+                ordered_parts = []
+                for segment_key in range(1, self._segment_seq + 1):
+                    if segment_key not in self._completed_segments:
+                        break
+                    part = self._session_parts.get(segment_key, "")
+                    if part:
+                        ordered_parts.append(part)
+                self._session_transcript = " ".join(ordered_parts).strip()
+                if self._transcript_before_session and self._session_transcript:
+                    self.full_transcript = f"{self._transcript_before_session} {self._session_transcript}"
                 else:
-                    self.after(0, lambda: self._set_status("🔴 Grabando..." if self.is_recording else "Listo"))
-        threading.Thread(target=_t, daemon=True).start()
+                    self.full_transcript = self._session_transcript or self._transcript_before_session
+
+            self._pending_segments = max(0, self._pending_segments - 1)
+
+        if error:
+            print(f"[Transcription] {error}")
+            self._set_status("Error de transcripcion")
+        elif text:
+            self._replace_text_display(self.full_transcript)
+
+        self._maybe_paste_session()
+
+    def _maybe_paste_session(self):
+        with self._segment_lock:
+            should_paste = self._paste_after_stop and not self.is_recording
+            text_to_paste = self._get_unpasted_session_delta_locked() if should_paste else ""
+            if text_to_paste:
+                self._session_pasted = True
+                self._last_pasted_session_text = self._session_transcript.strip()
+
+        if text_to_paste:
+            self._set_status("Pegando texto...")
+            self.after(100, lambda text=text_to_paste: self._type_to_active_window(text))
+            if self._pending_segments == 0:
+                self.after(250, lambda: self._set_status("Listo"))
+            else:
+                self.after(250, lambda: self._set_status("Completando texto..."))
+        elif self._paste_after_stop and self._pending_segments == 0 and not self.is_recording:
+            self._set_status("Listo")
+
+    def _get_unpasted_session_delta_locked(self):
+        current_text = self._session_transcript.strip()
+        pasted_text = self._last_pasted_session_text.strip()
+        if not current_text or current_text == pasted_text:
+            return ""
+        if not pasted_text:
+            return current_text
+        if current_text.startswith(pasted_text):
+            return current_text[len(pasted_text):].strip()
+        return ""
 
     def _on_level(self, level, has_speech):
         """Callback from audio stream with current level."""
@@ -369,16 +546,43 @@ class ScribeFloatApp(ctk.CTk):
 
     def _type_to_active_window(self, text):
         """
-        Pastes text into whatever app currently has focus.
-        Uses keyboard.write() which types directly without stealing focus.
+        Pega el texto en la app activa usando el portapapeles.
+        Es mas rapido y confiable que escribir caracter por caracter.
         """
         try:
-            # Small delay to ensure ScribeFloat doesn't have focus
+            previous_clipboard = None
+            try:
+                previous_clipboard = self.clipboard_get()
+            except Exception:
+                pass
+
+            self.clipboard_clear()
+            self.clipboard_append(text + " ")
+            self.update_idletasks()
             time.sleep(0.05)
-            # keyboard.write types character by character into the focused app
-            keyboard.write(text + " ", delay=0.01)
+            self._release_keyboard_keys()
+            keyboard.press_and_release("ctrl+v")
+            self._release_keyboard_keys()
+
+            self.after(250, lambda old=previous_clipboard: self._restore_clipboard(old))
         except Exception as e:
             print(f"[TypeOut] Error: {e}")
+
+    def _release_keyboard_keys(self):
+        for key in ("ctrl", "left ctrl", "right ctrl", "shift", "alt", "space", "v"):
+            try:
+                keyboard.release(key)
+            except Exception:
+                pass
+
+    def _restore_clipboard(self, previous_text):
+        try:
+            self.clipboard_clear()
+            if previous_text:
+                self.clipboard_append(previous_text)
+            self.update_idletasks()
+        except Exception as e:
+            print(f"[Clipboard] Error restaurando portapapeles: {e}")
 
     def _show_text(self, text):
         self.text_display.configure(state="normal")
@@ -390,51 +594,43 @@ class ScribeFloatApp(ctk.CTk):
         self.text_display.see("end")
         self.text_display.configure(state="disabled")
 
-    # ── AI ────────────────────────────────────────
-    def _improve_ai(self):
-        if not self.ollama_client or not self.ollama_client.is_available:
-            self._set_status("Ollama no disponible"); return
-        txt = self.text_display.get("0.0", "end").strip()
-        if not txt or txt == "Hable ahora...":
-            self._set_status("Sin texto"); return
-        self._set_status("✨ Procesando AI...")
-        self.ai_btn.configure(state="disabled", text="⏳")
-        self.ollama_client.improve_text_async(txt, lambda r: self.after(0, lambda: self._show_ai(r)),
-                                               language=self.current_language)
-
-    def _auto_improve(self):
-        if not self.ollama_client or not self.ollama_client.is_available:
-            return
-        txt = self.text_display.get("0.0", "end").strip()
-        if not txt or txt == "Hable ahora...":
-            return
-        self._set_status("✨ Auto-AI...")
-        self.ollama_client.improve_text_async(txt, lambda r: self.after(0, lambda: self._show_ai(r)),
-                                               language=self.current_language)
-
-    def _show_ai(self, text):
+    def _replace_text_display(self, text):
         self.text_display.configure(state="normal")
         self.text_display.delete("0.0", "end")
-        self.text_display.insert("0.0", text)
+        self.text_display.insert("0.0", text if text else "Hable ahora...")
+        self.text_display.see("end")
         self.text_display.configure(state="disabled")
-        self.full_transcript = text
-        self.ai_btn.configure(state="normal", text="✨ AI")
-        self._set_status("🔴 Grabando..." if self.is_recording else "✨ Mejorado")
+
+
+    def _reset_transcription_state(self, clear_display=False, clear_model_context=False):
+        self.full_transcript = ""
+        self._transcript_before_session = ""
+        self._session_transcript = ""
+        self._session_parts = {}
+        self._completed_segments = set()
+        self._last_pasted_session_text = ""
+        self._segment_seq = 0
+        self._pending_segments = 0
+        self._paste_after_stop = False
+        self._session_pasted = False
+
+        if clear_model_context and self.scribe_engine:
+            self.scribe_engine.clear_context()
+
+        if clear_display:
+            self._replace_text_display("")
+
 
     # ── ACTIONS ───────────────────────────────────
     def _save(self):
         txt = self.text_display.get("0.0", "end").strip()
         if not txt or txt == "Hable ahora...": return
-        d = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "exports")
+        d = os.path.join(os.path.expanduser("~"), "Documents", "ScribeFloat", "exports")
         save_transcription(txt, export_dir=d)
         self._set_status("💾 Guardado")
 
     def _clear(self):
-        self.text_display.configure(state="normal")
-        self.text_display.delete("0.0", "end")
-        self.text_display.insert("0.0", "Hable ahora...")
-        self.text_display.configure(state="disabled")
-        self.full_transcript = ""
+        self._reset_transcription_state(clear_display=True, clear_model_context=True)
 
     def _copy(self):
         txt = self.text_display.get("0.0", "end").strip()
@@ -459,9 +655,7 @@ class ScribeFloatApp(ctk.CTk):
         self._register_hotkey()
         hk = self.cfg.get("hotkey", "ctrl+space")
         self.hk_label.configure(text=f"Atajo: {hk}")
-        # Update ollama model if changed
-        if self.ollama_client and self.cfg.get("ollama_model") != self.ollama_client.model:
-            self.ollama_client = OllamaClient(model=self.cfg["ollama_model"])
+
 
     # ── VISUAL ────────────────────────────────────
     def _set_status(self, t):
@@ -500,6 +694,11 @@ class ScribeFloatApp(ctk.CTk):
         try: keyboard.unhook_all_hotkeys()
         except: pass
         if self.audio_capture: self.audio_capture.stop()
+        try:
+            self._segment_queue.put(None)
+        except Exception:
+            pass
+        self._hide_tray()
         self.destroy()
 
 

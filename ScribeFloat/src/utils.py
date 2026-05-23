@@ -11,25 +11,14 @@ from datetime import datetime
 def clean_text(text: str) -> str:
     """
     Limpia y normaliza el texto transcrito.
-    - Elimina espacios múltiples
-    - Agrega puntuación final si falta
-    - Capitaliza la primera letra
+    - Elimina espacios multiples
+    - Conserva la puntuacion y mayusculas que produjo Whisper
     """
     if not text or not text.strip():
         return ""
     
     # Eliminar espacios múltiples
-    text = re.sub(r'\s+', ' ', text).strip()
-    
-    # Capitalizar primera letra
-    if text and text[0].islower():
-        text = text[0].upper() + text[1:]
-    
-    # Agregar punto final si el último carácter es una letra o número
-    if text and text[-1].isalnum():
-        text += "."
-    
-    return text
+    return re.sub(r'\s+', ' ', text).strip()
 
 
 def save_transcription(text: str, export_dir: str = "exports", filename: str = None) -> str:

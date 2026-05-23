@@ -13,6 +13,18 @@ ScribeFloat/models/
 
 # Exportaciones temporales
 ScribeFloat/exports/
+ScribeFloat/Output/
+ScribeFloat/build_nuitka/
+
+# Instaladores y artefactos generados
+ScribeFloat/*.exe
+ScribeFloat/*.msi
+ScribeFloat/Generar_Setup.iss
+ScribeFloat/Preparar_Instalador.ps1
+ScribeFloat/venv_roto_*/
+ScribeFloat/runtime_*.log
+ScribeFloat/analisis_rendimiento.md
+ScribeFloat/registro_errores.md
 
 # Archivos del SO
 .DS_Store
