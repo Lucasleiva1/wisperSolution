@@ -4,8 +4,40 @@ Utiliza Faster-Whisper con optimización para GPUs con 4GB VRAM (GTX 1050 Ti).
 """
 
 import os
+import site
+import sys
 import threading
 import ctypes
+
+
+_DLL_DIRECTORY_HANDLES = []
+
+
+def _add_cuda_dll_directories():
+    """Allow CTranslate2 to find CUDA DLLs installed in this virtualenv."""
+    if os.name != "nt" or not hasattr(os, "add_dll_directory"):
+        return
+
+    candidate_roots = []
+    for path in site.getsitepackages() + sys.path:
+        if path and path.endswith("site-packages") and path not in candidate_roots:
+            candidate_roots.append(path)
+
+    for root in candidate_roots:
+        for relative_path in (
+            os.path.join("nvidia", "cuda_runtime", "bin"),
+            os.path.join("nvidia", "cuda_nvrtc", "bin"),
+            os.path.join("nvidia", "cublas", "bin"),
+            os.path.join("nvidia", "cudnn", "bin"),
+            "ctranslate2",
+        ):
+            dll_dir = os.path.join(root, relative_path)
+            if os.path.isdir(dll_dir):
+                _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(dll_dir))
+
+
+_add_cuda_dll_directories()
+
 import ctranslate2
 from faster_whisper import WhisperModel
 

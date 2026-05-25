@@ -3,7 +3,7 @@ ScribeFloat - UI Principal
 Ventana flotante + Mini mode (icono con ondas) + System Tray + Hotkey global.
 """
 import customtkinter as ctk
-import threading, math, sys, os, time, keyboard, queue
+import ctypes, threading, math, sys, os, time, keyboard, queue
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import pygame
 import pystray
@@ -32,6 +32,47 @@ LANGS = {"Español (es)":"es","Inglés (en)":"en","Portugués (pt)":"pt",
 
 
 START_SOUND_DELAY_MS = 350
+_SINGLE_INSTANCE_MUTEX = None
+
+
+def _acquire_single_instance():
+    """Prevent duplicate ScribeFloat windows, hotkeys, and tray icons."""
+    global _SINGLE_INSTANCE_MUTEX
+    if os.name != "nt":
+        return True
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p)
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+    kernel32.CloseHandle.restype = ctypes.c_bool
+
+    handle = kernel32.CreateMutexW(None, True, "Local\\ScribeFloatSingleInstance")
+    if not handle:
+        return True
+
+    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+        kernel32.CloseHandle(handle)
+        return False
+
+    _SINGLE_INSTANCE_MUTEX = handle
+    return True
+
+
+def _release_single_instance():
+    global _SINGLE_INSTANCE_MUTEX
+    if os.name != "nt" or not _SINGLE_INSTANCE_MUTEX:
+        return
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.ReleaseMutex.argtypes = (ctypes.c_void_p,)
+    kernel32.ReleaseMutex.restype = ctypes.c_bool
+    kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+    kernel32.CloseHandle.restype = ctypes.c_bool
+
+    kernel32.ReleaseMutex(_SINGLE_INSTANCE_MUTEX)
+    kernel32.CloseHandle(_SINGLE_INSTANCE_MUTEX)
+    _SINGLE_INSTANCE_MUTEX = None
 
 
 class ScribeFloatApp(ctk.CTk):
@@ -204,7 +245,6 @@ class ScribeFloatApp(ctk.CTk):
         self.main_panel.pack_forget()
         self.geometry("70x70")
         self._show_tray()
-        
         # Transparent corners hack for Windows
         self.configure(fg_color="#000001")
         self.wm_attributes("-transparentcolor", "#000001")
@@ -699,9 +739,11 @@ class ScribeFloatApp(ctk.CTk):
         except Exception:
             pass
         self._hide_tray()
+        _release_single_instance()
         self.destroy()
 
 
 if __name__ == "__main__":
-    app = ScribeFloatApp()
-    app.mainloop()
+    if _acquire_single_instance():
+        app = ScribeFloatApp()
+        app.mainloop()
