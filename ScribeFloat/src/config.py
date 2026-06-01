@@ -9,6 +9,17 @@ DEFAULT_CONFIG = {
     "hotkey": "ctrl+space",
     "language": "es",
     "model_size": "small",
+    "mini_mode": "capsule",
+    "capsule_width": 180,
+    "capsule_height": 30,
+    "capsule_border_glow": 115,
+    "capsule_mic_scale": 115,
+    "capsule_indicator_scale": 90,
+    "capsule_wave_bars": 42,
+    "capsule_wave_sensitivity": 130,
+    "capsule_wave_smoothing": 28,
+    "capsule_wave_amplitude": 115,
+    "capsule_wave_spread": 110,
 }
 
 def load_config():
