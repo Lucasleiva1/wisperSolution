@@ -174,8 +174,15 @@ class ScribeFloatApp(ctk.CTk):
         self._register_hotkey()
 
     def _asset_path(self, filename):
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        return os.path.join(base_dir, "assets", filename)
+        candidates = []
+        if getattr(sys, "frozen", False):
+            candidates.append(os.path.dirname(sys.executable))
+        candidates.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        for base_dir in candidates:
+            path = os.path.join(base_dir, "assets", filename)
+            if os.path.exists(path):
+                return path
+        return os.path.join(candidates[0], "assets", filename)
 
     def _init_sounds(self):
         self._sounds_enabled = False

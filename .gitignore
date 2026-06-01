@@ -15,6 +15,7 @@ ScribeFloat/models/
 ScribeFloat/exports/
 ScribeFloat/Output/
 ScribeFloat/build_nuitka/
+ScribeFloat/build_nuitka_final/
 
 # Instaladores y artefactos generados
 ScribeFloat/*.exe
